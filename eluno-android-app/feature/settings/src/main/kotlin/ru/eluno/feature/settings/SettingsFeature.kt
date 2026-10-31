@@ -60,7 +60,7 @@ class SettingsViewModel(private val settingsRepository: SettingsRepository) : Vi
     Surface(modifier.heightIn(min = 114.dp).clickable { onSelect(mode) }, color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
         Box(Modifier.padding(12.dp)) {
             Icon(icon, null, Modifier.size(30.dp), tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-            if (active) Icon(Icons.Outlined.Check, stringResource(R.string.selected), Modifier.size(18.dp).align(Alignment.TopEnd), tint = MaterialTheme.colorScheme.primary)
+            if (active) Icon(Icons.Outlined.Check, stringResource(R.string.settings_theme_selected), Modifier.size(18.dp).align(Alignment.TopEnd), tint = MaterialTheme.colorScheme.primary)
             Text(label, Modifier.align(Alignment.BottomStart), style = MaterialTheme.typography.labelLarge, color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
         }
     }

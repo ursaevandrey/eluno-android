@@ -1,5 +1,7 @@
 package ru.eluno.app
 
+import ru.eluno.feature.widgets.*
+
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -71,6 +71,7 @@ internal class MemoryDao : ElunoDao {
     private val snapshots = linkedMapOf<String, SnapshotEntity>()
     val commands = mutableListOf<CommandEntity>()
     private val widgetBindings = mutableMapOf<Int, WidgetBindingEntity>()
+    override fun observeWidgetBindings(): Flow<List<WidgetBindingEntity>> = MutableStateFlow(widgetBindings.values.toList())
     override fun observeWidgetBinding(id: Int): Flow<WidgetBindingEntity?> = MutableStateFlow(widgetBindings[id])
     override suspend fun getWidgetBinding(id: Int) = widgetBindings[id]
     override suspend fun upsertWidgetBinding(binding: WidgetBindingEntity) { widgetBindings[binding.appWidgetId] = binding }
@@ -85,6 +86,7 @@ internal class MemoryDao : ElunoDao {
     suspend fun deviceCount() = devices.size
     override suspend fun upsertDevice(entity: DeviceEntity) { devices[entity.id] = entity; deviceFlow.value = devices.values.toList() }
     override suspend fun upsertSnapshot(entity: SnapshotEntity) { snapshots[entity.deviceId] = entity; snapshotFlows.getOrPut(entity.deviceId) { MutableStateFlow(null) }.value = entity }
+    override suspend fun pruneCommands(before: Long, keep: Int): Int = 0
     override suspend fun upsertCommand(entity: CommandEntity) { commands.removeAll { it.id == entity.id }; commands += entity }
     override suspend fun rename(id: String, name: String): Int { val old = devices[id] ?: return 0; devices[id] = old.copy(name = name); deviceFlow.value = devices.values.toList(); return 1 }
     override suspend fun setIcon(id: String, icon: String): Int { val old = devices[id] ?: return 0; devices[id] = old.copy(icon = icon); deviceFlow.value = devices.values.toList(); return 1 }

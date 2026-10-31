@@ -5,6 +5,7 @@ android {
     compileSdk = 37
     defaultConfig {
         minSdk = 28
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("int", "MATTER_VENDOR_ID", providers.gradleProperty("matterVendorId").getOrElse("65524"))
     }
     buildFeatures { buildConfig = true }
@@ -13,6 +14,9 @@ android {
 dependencies {
     implementation(project(":core:domain"))
     implementation(project(":core:chip"))
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(project(":core:chip"))
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     implementation(libs.coroutines.core)

@@ -1,5 +1,7 @@
 package ru.eluno.app
 
+import ru.eluno.feature.widgets.*
+
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
@@ -30,6 +32,7 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 import androidx.work.ForegroundInfo
 import androidx.work.CoroutineWorker
 import androidx.work.Constraints
@@ -42,7 +45,8 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import androidx.glance.appwidget.updateAll
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import ru.eluno.core.domain.*
 import ru.eluno.feature.devices.deviceIcon
@@ -55,7 +59,7 @@ open class DeviceWidget : GlanceAppWidget() {
     protected open val horizontal = false
     override suspend fun onDelete(context: Context, glanceId: GlanceId) {
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(glanceId)
-        (context.applicationContext as ElunoApplication).container.dao.deleteWidgetBinding(widgetId)
+        (context.applicationContext as ElunoApplication).container.widgetRepository.unbind(widgetId)
     }
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -63,7 +67,7 @@ open class DeviceWidget : GlanceAppWidget() {
         container.awaitInitialization()
         val appWidgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
         val presentations = observeWidgetPresentation(
-            container.dao.observeWidgetBinding(appWidgetId),
+            container.widgetRepository.observeBinding(appWidgetId),
             container.deviceRepository,
         )
         val initialPresentation = presentations.first()
@@ -75,16 +79,24 @@ open class DeviceWidget : GlanceAppWidget() {
                     ?: kotlinx.coroutines.flow.flowOf(emptyList())
             }.collectAsState(initial = emptyList())
             val working = workInfos.any { !it.state.isFinished }
-            WidgetContent(context, appWidgetId, presentation.device, presentation.snapshot, localNetworkAllowed(context), horizontal, working, presentation.backgroundEnabled, presentation.backgroundOpacity, presentation.colorMode)
+            WidgetContent(context, appWidgetId, presentation.device, presentation.pending, localNetworkAllowed(context), horizontal, working, presentation.backgroundEnabled, presentation.backgroundOpacity, presentation.colorMode)
         }
     }
 }
 
 class HorizontalDeviceWidget : DeviceWidget() { override val horizontal = true }
 
-suspend fun updateDeviceWidgets(context: Context) {
-    DeviceWidget().updateAll(context)
-    HorizontalDeviceWidget().updateAll(context)
+suspend fun updateDeviceWidget(context: Context, widgetId: Int) {
+    try {
+    val info = AppWidgetManager.getInstance(context).getAppWidgetInfo(widgetId) ?: return
+    val widget = when (info.provider.className) {
+        DeviceWidgetReceiver::class.java.name -> DeviceWidget()
+        HorizontalDeviceWidgetReceiver::class.java.name -> HorizontalDeviceWidget()
+        else -> return
+    }
+    widget.update(context, GlanceAppWidgetManager(context).getGlanceIdBy(widgetId))
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (error: Exception) { android.util.Log.w("ElunoWidget", "Widget update failed", error) }
 }
 
 suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
@@ -102,9 +114,9 @@ suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
     AppWidgetManager.getInstance(context).updateAppWidget(widgetId, views)
 }
 
-@Composable private fun WidgetContent(context: Context, widgetId: Int, device: Device?, state: DeviceSnapshot?, allowed: Boolean, horizontal: Boolean, working: Boolean, backgroundEnabled: Boolean, backgroundOpacity: Int, colorMode: WidgetColorMode) {
+@Composable private fun WidgetContent(context: Context, widgetId: Int, device: Device?, pending: Boolean, allowed: Boolean, horizontal: Boolean, working: Boolean, backgroundEnabled: Boolean, backgroundOpacity: Int, colorMode: WidgetColorMode) {
     val surface = widgetBackgroundProvider(colorMode, backgroundEnabled, backgroundOpacity)
-    val ink = widgetColorProvider(colorMode, LightWidgetPalette.text, DarkWidgetPalette.text, R.color.widget_ink)
+    val ink = widgetColorProvider(colorMode, LightWidgetPalette.text, DarkWidgetPalette.text)
     val radius = if (android.os.Build.VERSION.SDK_INT >= 31) android.R.dimen.system_app_widget_background_radius else 0
     val background = if (radius != 0) GlanceModifier.fillMaxSize().background(surface).cornerRadius(radius) else GlanceModifier.fillMaxSize().background(surface).cornerRadius(28.dp)
     if (device == null) {
@@ -117,7 +129,7 @@ suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
     }
     val openDevice = Intent(context, MainActivity::class.java).apply {
         action = ACTION_OPEN_WIDGET_DEVICE
-        data = android.net.Uri.parse("eluno://widget/$widgetId")
+        data = "eluno://widget/$widgetId".toUri()
         putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
     }
@@ -125,13 +137,13 @@ suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
         Row(background.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.Vertical.CenterVertically, horizontalAlignment = Alignment.Horizontal.CenterHorizontally) {
             Column(GlanceModifier.defaultWeight(), verticalAlignment = Alignment.Vertical.CenterVertically) { WidgetName(device, openDevice, ink) }
             Spacer(GlanceModifier.width(8.dp))
-            PowerButton(context, widgetId, device, state, allowed, 56, working, colorMode)
+            PowerButton(context, widgetId, device, pending, allowed, 56, working, colorMode)
         }
     } else {
         Column(background.padding(horizontal = 16.dp, vertical = 16.dp), horizontalAlignment = Alignment.Horizontal.CenterHorizontally, verticalAlignment = Alignment.Vertical.CenterVertically) {
             WidgetName(device, openDevice, ink, centered = true)
             Spacer(GlanceModifier.height(12.dp))
-            PowerButton(context, widgetId, device, state, allowed, 72, working, colorMode)
+            PowerButton(context, widgetId, device, pending, allowed, 72, working, colorMode)
         }
     }
 }
@@ -151,15 +163,15 @@ suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
     }
 }
 
-@Composable private fun PowerButton(context: Context, widgetId: Int, device: Device, state: DeviceSnapshot?, allowed: Boolean, size: Int, working: Boolean, colorMode: WidgetColorMode) {
-    val enabled = allowed && Capability.OnOff in device.capabilities && state?.pendingCommand == null && !working
+@Composable private fun PowerButton(context: Context, widgetId: Int, device: Device, pending: Boolean, allowed: Boolean, size: Int, working: Boolean, colorMode: WidgetColorMode) {
+    val enabled = allowed && Capability.OnOff in device.capabilities && !pending && !working
     val params = actionParametersOf(widgetIdKey to widgetId, deviceIdKey to device.id.value)
     val label = when {
-        working || state?.pendingCommand != null -> context.getString(R.string.widget_pending)
+        working || pending -> context.getString(R.string.widget_pending)
         else -> context.getString(R.string.widget_toggle, device.name)
     }
-    val bg = widgetColorProvider(colorMode, LightWidgetPalette.button, DarkWidgetPalette.button, R.color.widget_button_on)
-    val tint = widgetColorProvider(colorMode, LightWidgetPalette.power, DarkWidgetPalette.power, R.color.widget_icon_on)
+    val bg = widgetColorProvider(colorMode, LightWidgetPalette.button, DarkWidgetPalette.button)
+    val tint = widgetColorProvider(colorMode, LightWidgetPalette.power, DarkWidgetPalette.power)
     val ripple = when (colorMode) {
         WidgetColorMode.System -> R.drawable.widget_power_ripple
         WidgetColorMode.Light -> R.drawable.widget_power_ripple_light
@@ -173,12 +185,14 @@ suspend fun updateConfiguredWidget(context: Context, widgetId: Int) {
 
 class PowerAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        val createdAt = System.currentTimeMillis()
+        val createdElapsed = android.os.SystemClock.elapsedRealtime()
         val widgetId = parameters[widgetIdKey] ?: return
         val deviceId = parameters[deviceIdKey] ?: return
         val container = (context.applicationContext as ElunoApplication).container
-        if (GlanceAppWidgetManager(context).getAppWidgetId(glanceId) != widgetId || container.dao.getWidgetBinding(widgetId)?.deviceId != deviceId || !localNetworkAllowed(context)) return
+        if (GlanceAppWidgetManager(context).getAppWidgetId(glanceId) != widgetId || container.widgetRepository.getBinding(widgetId)?.deviceId?.value != deviceId || !localNetworkAllowed(context)) return
         val builder = OneTimeWorkRequestBuilder<WidgetPowerWorker>()
-            .setInputData(workDataOf("widgetId" to widgetId, "deviceId" to deviceId, "created" to System.currentTimeMillis()))
+            .setInputData(workDataOf("widgetId" to widgetId, "deviceId" to deviceId, "created" to createdAt, "createdElapsed" to createdElapsed))
         if (android.os.Build.VERSION.SDK_INT >= 31) {
             // A network constraint lets JobScheduler grant expedited work network access
             // during Battery Saver. Avoid it otherwise so offline LANs still work.
@@ -208,24 +222,28 @@ class WidgetPowerWorker(context: Context, params: WorkerParameters) : CoroutineW
     override suspend fun doWork(): Result {
         val widgetId = inputData.getInt("widgetId", -1)
         val deviceId = inputData.getString("deviceId") ?: return Result.failure()
-        if (System.currentTimeMillis() - inputData.getLong("created", 0) > 60_000 || !localNetworkAllowed(applicationContext)) return Result.failure()
+        val elapsed = android.os.SystemClock.elapsedRealtime() - inputData.getLong("createdElapsed", -1)
+        val age = System.currentTimeMillis() - inputData.getLong("created", 0)
+        val remaining = 15_000 - maxOf(elapsed, age)
+        if (elapsed < 0 || age < 0 || remaining <= 0 || !localNetworkAllowed(applicationContext)) return Result.failure()
         val container = (applicationContext as ElunoApplication).container
-        container.awaitInitialization()
-        if (container.dao.getWidgetBinding(widgetId)?.deviceId != deviceId) return Result.failure()
-        val device = container.deviceRepository.observeDevice(DeviceId(deviceId)).first() ?: return Result.failure()
-        if (Capability.OnOff !in device.capabilities) return Result.failure()
         return try {
-            val result = withTimeout(30_000) {
-                executeWidgetToggle(container.deviceRepository, device.id) {
-                    localNetworkAllowed(applicationContext) && container.dao.getWidgetBinding(widgetId)?.deviceId == deviceId
+            withTimeout(remaining) {
+                container.awaitInitialization()
+                if (container.widgetRepository.getBinding(widgetId)?.deviceId?.value != deviceId) return@withTimeout Result.failure()
+                val result = executeWidgetToggle(container.deviceRepository, DeviceId(deviceId)) {
+                    localNetworkAllowed(applicationContext) && container.widgetRepository.getBinding(widgetId)?.deviceId?.value == deviceId
                 }
+                if (result.isSuccess) Result.success() else Result.failure()
             }
-            if (result.isSuccess) Result.success() else Result.failure()
-        } catch (_: kotlinx.coroutines.TimeoutCancellationException) { Result.failure() }
-        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            Result.failure()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) { Result.failure() }
-        finally { updateDeviceWidgets(applicationContext) }
+        finally { withContext(kotlinx.coroutines.NonCancellable) { updateDeviceWidget(applicationContext, widgetId) } }
     }
+
 }
 
 open class DeviceWidgetReceiver : GlanceAppWidgetReceiver() {
@@ -235,9 +253,13 @@ open class DeviceWidgetReceiver : GlanceAppWidgetReceiver() {
         val pending = goAsync()
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             try {
-                val dao = (context.applicationContext as ElunoApplication).container.dao
-                oldWidgetIds.zip(newWidgetIds).forEach { (old, new) -> dao.getWidgetBinding(old)?.let { dao.upsertWidgetBinding(it.copy(appWidgetId = new)); dao.deleteWidgetBinding(old) } }
-                updateDeviceWidgets(context)
+                val bindings = (context.applicationContext as ElunoApplication).container.widgetRepository
+                bindings.restore(oldWidgetIds.toList(), newWidgetIds.toList())
+                newWidgetIds.forEach { updateDeviceWidget(context, it) }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.w("ElunoWidget", "Widget restore failed", error)
             } finally { pending.finish() }
         }
     }

@@ -1,5 +1,7 @@
 package ru.eluno.app
 
+import ru.eluno.feature.widgets.*
+
 import android.os.Bundle
 import android.appwidget.AppWidgetManager
 import android.content.Intent
@@ -101,8 +103,8 @@ class MainActivity : ComponentActivity() {
     var navigationRevision by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(widgetRequest) {
         val request = widgetRequest ?: return@LaunchedEffect
-        val id = container.dao.getWidgetBinding(request.widgetId)?.deviceId
-        val device = id?.let { container.deviceRepository.observeDevice(DeviceId(it)).first() }
+        val id = container.widgetRepository.getBinding(request.widgetId)?.deviceId
+        val device = id?.let { container.deviceRepository.observeDevice(it).first() }
         selectedId = device?.id?.value
         destinationName = if (device == null) Destination.Devices.name else Destination.Detail.name
         navigationRevision++

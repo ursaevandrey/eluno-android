@@ -11,6 +11,11 @@ android {
 }
 
 dependencies {
+    constraints {
+        implementation(libs.lifecycle.runtime.compose) {
+            because("Keep Compose's transitive Lifecycle and its lint checks aligned with the app")
+        }
+    }
     api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.foundation)

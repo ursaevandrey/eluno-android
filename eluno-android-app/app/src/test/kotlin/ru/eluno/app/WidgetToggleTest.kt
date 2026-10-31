@@ -1,5 +1,7 @@
 package ru.eluno.app
 
+import ru.eluno.feature.widgets.*
+
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
@@ -18,6 +20,13 @@ class WidgetToggleTest {
         override suspend fun submit(id: DeviceId, command: DeviceCommand): Result<CommandId> {
             commands += command
             return Result.success(CommandId("command"))
+        }
+        override suspend fun togglePower(id: DeviceId, stillAllowed: suspend () -> Boolean): Result<CommandId> {
+            if (read.isFailure) return Result.failure(read.exceptionOrNull()!!)
+            val state = snapshot
+            val on = state?.reported?.isOn
+            if (state?.freshness != Freshness.Fresh || on == null || !stillAllowed()) return Result.failure(IllegalStateException())
+            return submit(id, DeviceCommand.SetPower(!on))
         }
         override suspend fun rename(id: DeviceId, name: String) = Result.success(Unit)
         override suspend fun setIcon(id: DeviceId, icon: DeviceIcon) = Result.success(Unit)

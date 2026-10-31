@@ -14,6 +14,7 @@ else
   git apply --reverse --check "$project_dir/patches/connectedhomeip-eluno.patch"
 fi
 python3 scripts/checkout_submodules.py --platform android --shallow --jobs 8
+python3 "$project_dir/scripts/verify-matter-sdk.py" prepare
 # SDK bootstrap expects unset shell variables in its own scripts.
 set +u
 source scripts/activate.sh
@@ -33,3 +34,5 @@ printf '%s\n' "$revision" > "$project_dir/.matter-sdk/revision"
 shasum -a 256 "$project_dir/.matter-sdk/jniLibs/arm64-v8a/"*.so > "$project_dir/.matter-sdk/native-sha256.txt"
 
 shasum -a 256 "$project_dir/patches/connectedhomeip-eluno.patch" | cut -d ' ' -f 1 > "$project_dir/.matter-sdk/patch-sha256"
+
+python3 "$project_dir/scripts/verify-matter-sdk.py" write

@@ -74,6 +74,8 @@ data class DeviceSnapshot(
     val lastConfirmedAt: Instant? = null,
     val pendingCommand: PendingCommand? = null,
     val lastError: DeviceError? = null,
+    /** Process-local ordering of observations; never used as a persistent identity. */
+    val sourceSequence: Long = 0,
 )
 
 sealed interface CommandResult {
@@ -93,6 +95,7 @@ interface DeviceRepository {
     fun observeSnapshot(id: DeviceId): Flow<DeviceSnapshot?>
     suspend fun refresh(id: DeviceId): Result<Unit>
     suspend fun submit(id: DeviceId, command: DeviceCommand): Result<CommandId>
+    suspend fun togglePower(id: DeviceId, stillAllowed: suspend () -> Boolean = { true }): Result<CommandId>
     suspend fun rename(id: DeviceId, name: String): Result<Unit>
     suspend fun setIcon(id: DeviceId, icon: DeviceIcon): Result<Unit>
 }
@@ -106,7 +109,22 @@ interface SettingsRepository {
     suspend fun setDynamicColors(enabled: Boolean)
 }
 
-data class WidgetBinding(val appWidgetId: Int, val deviceId: DeviceId)
+data class WidgetBinding(
+    val appWidgetId: Int,
+    val deviceId: DeviceId,
+    val backgroundEnabled: Boolean = true,
+    val backgroundOpacity: Int = 100,
+    val colorMode: String = "System",
+)
+
+interface WidgetBindingRepository {
+    fun observeBindings(): Flow<List<WidgetBinding>>
+    fun observeBinding(id: Int): Flow<WidgetBinding?>
+    suspend fun getBinding(id: Int): WidgetBinding?
+    suspend fun bind(binding: WidgetBinding)
+    suspend fun unbind(id: Int)
+    suspend fun restore(oldIds: List<Int>, newIds: List<Int>)
+}
 
 fun Device.validate(command: DeviceCommand): DeviceError? = when (command) {
     is DeviceCommand.SetPower -> if (capabilities.any { it is Capability.OnOff }) null

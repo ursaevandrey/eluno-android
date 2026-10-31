@@ -1,5 +1,7 @@
 package ru.eluno.app
 
+import ru.eluno.feature.widgets.*
+
 import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.Intent
@@ -32,7 +34,8 @@ import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
@@ -44,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import ru.eluno.core.database.WidgetBindingEntity
+import ru.eluno.core.domain.WidgetBinding
 import ru.eluno.core.designsystem.ElunoIcons
 import ru.eluno.core.designsystem.ElunoTheme
 import ru.eluno.core.domain.Capability
@@ -77,8 +80,8 @@ class WidgetConfigActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 LaunchedEffect(widgetId) {
                     if (!loaded) {
-                        container.dao.getWidgetBinding(widgetId)?.let { binding ->
-                            selected = binding.deviceId
+                        container.widgetRepository.getBinding(widgetId)?.let { binding ->
+                            selected = binding.deviceId.value
                             backgroundEnabled = binding.backgroundEnabled
                             opacity = normalizeWidgetOpacity(binding.backgroundOpacity)
                             colorModeName = WidgetColorMode.fromStorage(binding.colorMode).name
@@ -143,7 +146,7 @@ class WidgetConfigActivity : ComponentActivity() {
                                                     return@launch
                                                 }
                                                 try {
-                                                    container.dao.upsertWidgetBinding(WidgetBindingEntity(widgetId, id, backgroundEnabled, normalizeWidgetOpacity(opacity), colorMode.name))
+                                                    container.widgetRepository.bind(WidgetBinding(widgetId, DeviceId(id), backgroundEnabled, normalizeWidgetOpacity(opacity), colorMode.name))
                                                     updateConfiguredWidget(this@WidgetConfigActivity, widgetId)
                                                     setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
                                                     finish()
@@ -237,7 +240,8 @@ class WidgetConfigActivity : ComponentActivity() {
 }
 
 @Composable private fun WidgetDropdown(expanded: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val menuWidth = (LocalConfiguration.current.screenWidthDp.dp - 40.dp).coerceIn(200.dp, 400.dp)
+    val windowWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
+    val menuWidth = (windowWidth - 40.dp).coerceIn(200.dp, 400.dp)
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,

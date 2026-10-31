@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.time.Instant
 
 class DeviceRepositoryImpl(
@@ -21,6 +25,7 @@ class DeviceRepositoryImpl(
 ) : DeviceRepository {
     private val commandLocks = java.util.concurrent.ConcurrentHashMap<DeviceId, Mutex>()
     private val stateMutex = Mutex()
+    private val sourceSequences = mutableMapOf<DeviceId, Long>()
     private var synchronization: kotlinx.coroutines.Job? = null
 
     override fun observeDevices(): Flow<List<Device>> = dao.observeDevices().map { rows -> rows.map(DeviceEntity::toDomain) }
@@ -60,7 +65,14 @@ class DeviceRepositoryImpl(
         stateMutex.withLock { markCachedStateStale(recoverCommands = false) }
     }
 
-    suspend fun recoverAfterRestart() = stateMutex.withLock { markCachedStateStale(recoverCommands = true) }
+    suspend fun recoverAfterRestart() {
+        stateMutex.withLock { markCachedStateStale(recoverCommands = true) }
+        // Bounded startup maintenance; active records are never pruned.
+        repeat(5) { if (pruneCommands() < 200) return }
+    }
+
+    private suspend fun pruneCommands() = dao.pruneCommands(Instant.now().minusSeconds(30L * 24 * 60 * 60).toEpochMilli(), 1000)
+
 
     private suspend fun markCachedStateStale(recoverCommands: Boolean) {
         dao.observeDevices().first().forEach { device ->
@@ -78,6 +90,11 @@ class DeviceRepositoryImpl(
     }
 
     private suspend fun saveReport(incoming: DeviceSnapshot) {
+        if (incoming.freshness == Freshness.Fresh && incoming.sourceSequence != 0L) {
+            val previous = sourceSequences[incoming.deviceId] ?: 0
+            if (incoming.sourceSequence < previous) return
+            sourceSequences[incoming.deviceId] = incoming.sourceSequence
+        }
         val old = dao.getSnapshot(incoming.deviceId.value)?.toDomain()
         val oldTime = old?.lastConfirmedAt
         val newTime = incoming.lastConfirmedAt
@@ -106,40 +123,71 @@ class DeviceRepositoryImpl(
         }
     }
 
-    override suspend fun submit(id: DeviceId, command: DeviceCommand): Result<CommandId> = cancellableResult {
-        commandLocks.getOrPut(id) { Mutex() }.withLock {
-            val device = dao.getDevice(id.value)?.toDomain() ?: error("Устройство не найдено")
-            device.validate(command)?.let { error(it.displayText()) }
-            val commandId = CommandId.create()
-            val now = Instant.now()
-            stateMutex.withLock {
-                val current = dao.getSnapshot(id.value)?.toDomain() ?: DeviceSnapshot(id)
-                dao.saveCommandState(command.toEntity(commandId, id, "Running", now), current.copy(pendingCommand = PendingCommand(commandId, command, now), lastError = null).toEntity())
+    override suspend fun submit(id: DeviceId, command: DeviceCommand): Result<CommandId> =
+        commandRequest(id) { command }
+
+    override suspend fun togglePower(id: DeviceId, stillAllowed: suspend () -> Boolean): Result<CommandId> =
+        commandRequest(id, stillAllowed) { device ->
+            val report = when (val result = matterPort.read(device)) {
+                is CommandResult.Success -> result.snapshot
+                is CommandResult.Failure -> error(result.error.displayText())
             }
-            try {
-                val result = matterPort.execute(device, command)
-                stateMutex.withLock {
-                    val current = dao.getSnapshot(id.value)?.toDomain() ?: DeviceSnapshot(id)
-                    when (result) {
-                        is CommandResult.Success -> {
-                            saveReport(result.snapshot)
-                            val latest = dao.getSnapshot(id.value)!!.toDomain()
-                            dao.saveCommandState(command.toEntity(commandId, id, "Confirmed", now), latest.copy(pendingCommand = null, lastError = null).toEntity())
-                        }
-                        is CommandResult.Failure -> dao.saveCommandState(command.toEntity(commandId, id, "Failed", now, result.error.displayText()), current.failed(result.error).copy(pendingCommand = null).toEntity())
-                    }
-                }
-                if (result is CommandResult.Failure) error(result.error.displayText())
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                withContext(kotlinx.coroutines.NonCancellable) { finishInterrupted(id, commandId, command, now) }
-                throw cancelled
-            } catch (error: Exception) {
-                finishInterrupted(id, commandId, command, now)
-                throw error
-            }
-            commandId
+            stateMutex.withLock { saveReport(report) }
+            val on = report.reported.isOn
+            check(report.freshness == Freshness.Fresh && on != null) { "Не удалось определить состояние устройства" }
+            DeviceCommand.SetPower(!on)
         }
-    }
+
+    /** One deadline covers queueing, toggle read, dispatch and acknowledgement. */
+    private suspend fun commandRequest(
+        id: DeviceId,
+        stillAllowed: suspend () -> Boolean = { true },
+        commandFor: suspend (Device) -> DeviceCommand,
+    ): Result<CommandId> = try {
+        val submittedAt = Instant.now()
+        Result.success(withTimeout(15_000) {
+            commandLocks.getOrPut(id) { Mutex() }.withLock {
+                val device = dao.getDevice(id.value)?.toDomain() ?: error("Устройство не найдено")
+                check(stillAllowed()) { "Привязка виджета или разрешение изменились" }
+                val command = commandFor(device)
+                device.validate(command)?.let { error(it.displayText()) }
+                val commandId = CommandId.create()
+                try {
+                    stateMutex.withLock {
+                        val current = dao.getSnapshot(id.value)?.toDomain() ?: DeviceSnapshot(id)
+                        dao.saveCommandState(command.toEntity(commandId, id, "Running", submittedAt), current.copy(pendingCommand = PendingCommand(commandId, command, submittedAt), lastError = null).toEntity())
+                    }
+                    check(stillAllowed()) { "Привязка виджета или разрешение изменились" }
+                    currentCoroutineContext().ensureActive()
+                    val result = matterPort.execute(device, command)
+                    stateMutex.withLock {
+                        val current = dao.getSnapshot(id.value)?.toDomain() ?: DeviceSnapshot(id)
+                        when (result) {
+                            is CommandResult.Success -> {
+                                saveReport(result.snapshot)
+                                val latest = dao.getSnapshot(id.value)!!.toDomain()
+                                dao.saveCommandState(command.toEntity(commandId, id, "Confirmed", submittedAt), latest.copy(pendingCommand = null, lastError = null).toEntity())
+                            }
+                            is CommandResult.Failure -> dao.saveCommandState(command.toEntity(commandId, id, "Failed", submittedAt, result.error.displayText()), current.failed(result.error).copy(pendingCommand = null).toEntity())
+                        }
+                    }
+                    if (result is CommandResult.Failure) error(result.error.displayText())
+                } catch (error: Exception) {
+                    // Includes cancellation while returning from the durable pending transaction.
+                    try {
+                        withContext(kotlinx.coroutines.NonCancellable) { finishInterrupted(id, commandId, command, submittedAt) }
+                    } catch (cleanupFailure: Exception) { error.addSuppressed(cleanupFailure) }
+                    throw error
+                }
+                pruneCommands()
+                commandId
+            }
+        })
+    } catch (_: TimeoutCancellationException) {
+        currentCoroutineContext().ensureActive() // Preserve cancellation from the caller/worker.
+        Result.failure(IllegalStateException("Срок команды истёк. Обновите состояние устройства."))
+    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+    catch (error: Exception) { Result.failure(error) }
 
     private suspend fun finishInterrupted(id: DeviceId, commandId: CommandId, command: DeviceCommand, now: Instant) = stateMutex.withLock {
         val current = dao.getSnapshot(id.value)?.toDomain() ?: return@withLock
@@ -149,13 +197,13 @@ class DeviceRepositoryImpl(
         }
     }
 
-    override suspend fun rename(id: DeviceId, name: String): Result<Unit> = runCatching {
+    override suspend fun rename(id: DeviceId, name: String): Result<Unit> = cancellableResult {
         val clean = name.trim()
         require(clean.isNotEmpty()) { "Имя не может быть пустым" }
         check(dao.rename(id.value, clean) == 1) { "Устройство не найдено" }
     }
 
-    override suspend fun setIcon(id: DeviceId, icon: DeviceIcon): Result<Unit> = runCatching {
+    override suspend fun setIcon(id: DeviceId, icon: DeviceIcon): Result<Unit> = cancellableResult {
         check(dao.setIcon(id.value, icon.name) == 1) { "Устройство не найдено" }
     }
 

@@ -1,4 +1,3 @@
-import java.security.MessageDigest
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileSystemOperations
 import javax.inject.Inject
@@ -49,26 +48,14 @@ androidComponents.onVariants { variant ->
     variant.sources.kotlin?.addGeneratedSourceDirectory(importChipSources) { it.outputDirectory }
 }
 dependencies {
-    implementation("androidx.annotation:annotation:1.9.1")
-    implementation("com.google.code.findbugs:jsr305:3.0.2")
-    implementation("com.google.code.gson:gson:2.9.1")
-    implementation("com.google.protobuf:protobuf-java:3.22.0")
+    implementation(libs.annotation)
+    implementation(libs.jsr305)
+    implementation(libs.gson)
+    testImplementation(libs.junit)
 }
 
-val verifyMatterSdk = tasks.register("verifyMatterSdk") {
-    doLast {
-        val revision = rootProject.file(".matter-sdk/revision")
-        check(revision.exists() && revision.readText().trim() == "3bcdd56ba54fb88b2afb4bfef575014671df7aa7") {
-            "Сначала выполните scripts/build-matter-sdk.sh: требуется connectedhomeip v1.6.1.0 с поправками Eluno"
-        }
-        val patch = rootProject.file("patches/connectedhomeip-eluno.patch")
-        val hash = MessageDigest.getInstance("SHA-256").digest(patch.readBytes()).joinToString("") { "%02x".format(it) }
-        check(rootProject.file(".matter-sdk/patch-sha256").readText().trim() == hash) { "Пересоберите Matter SDK после изменения патча" }
-        listOf("libCHIPController.so", "libc++_shared.so").forEach {
-            check(rootProject.file(".matter-sdk/jniLibs/arm64-v8a/$it").isFile) { "Не найдена нативная библиотека $it" }
-        }
-        check(rootProject.file(".matter-sdk/assets/paa").listFiles().orEmpty().any { it.extension == "der" }) { "Отсутствуют production PAA" }
-    }
+val verifyMatterSdk = tasks.register<Exec>("verifyMatterSdk") {
+    commandLine("python3", rootProject.file("scripts/verify-matter-sdk.py"))
 }
 tasks.named("preBuild") { dependsOn(verifyMatterSdk) }
 importChipSources { dependsOn(verifyMatterSdk) }

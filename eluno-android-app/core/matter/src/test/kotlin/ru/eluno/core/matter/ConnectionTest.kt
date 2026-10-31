@@ -196,7 +196,7 @@ private class TestTransport : MatterTransport {
     var readGate: CompletableDeferred<Unit>? = null
     override suspend fun reconnect(device: Device) { reconnections++ }
     val failure = MutableSharedFlow<Unit>()
-    override suspend fun read(device: Device): ReportedState { reads++; readGate?.await(); if (failReads) error("offline"); return state }
+    override suspend fun read(device: Device): MatterObservation { reads++; readGate?.await(); if (failReads) error("offline"); return MatterObservation(state) }
     override suspend fun invoke(device: Device, command: DeviceCommand) {
         invokes++
         if (suspendInvoke) awaitCancellation()
@@ -204,7 +204,7 @@ private class TestTransport : MatterTransport {
     }
     override fun subscribe(device: Device) = flow {
         active++; subscriptions++
-        try { emit(state); failure.first(); error("subscription lost") }
+        try { emit(MatterObservation(state)); failure.first(); error("subscription lost") }
         finally { active-- }
     }
 }

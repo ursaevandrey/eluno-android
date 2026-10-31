@@ -13,6 +13,8 @@ import kotlin.coroutines.resumeWithException
 import kotlin.math.roundToInt
 
 internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTransport {
+    private val states = java.util.concurrent.ConcurrentHashMap<DeviceId, AttributeStateCache>()
+    private fun cache(device: Device) = states.getOrPut(device.id) { AttributeStateCache() }
     private val chip get() = runtime.controller
 
     private suspend fun connect(node: String): Long = suspendCancellableCoroutine { continuation ->
@@ -29,12 +31,13 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
         return try { block(pointer) } finally { chip.releaseConnectedDevicePointer(pointer) }
     }
 
-    override suspend fun reconnect(device: Device) { chip.markNodeSessionsDefunct(device.binding.nodeIdHex.toULong(16).toLong()) }
+    override suspend fun reconnect(device: Device) { cache(device).resetVersions(); chip.markNodeSessionsDefunct(device.binding.nodeIdHex.toULong(16).toLong()) }
 
-    override suspend fun read(device: Device): ReportedState = try {
+    override suspend fun read(device: Device): MatterObservation = try {
         connected(device.binding.nodeIdHex) { pointer ->
+            val readStartedAt = cache(device).currentSequence()
             val report = readPaths(pointer, paths(device))
-            decode(device, report, ReportedState())
+            decode(device, report, readStartedAt)
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -93,6 +96,7 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
             }
         }
         writer.endStructure()
+        currentCoroutineContext().ensureActive()
         suspendCancellableCoroutine<Unit> { continuation ->
             chip.invoke(object : InvokeCallback {
                 override fun onError(e: Exception) { if (continuation.isActive) continuation.resumeWithException(e) }
@@ -106,15 +110,17 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
         }
     }
 
-    override fun subscribe(device: Device): Flow<ReportedState> = callbackFlow {
+    override fun subscribe(device: Device): Flow<MatterObservation> = callbackFlow {
         val pointer = withTimeout(25_000) { connect(device.binding.nodeIdHex) }
         val guard = Any()
         var closed = false
         var subscriptionId: Long? = null
-        var state = ReportedState()
         fun shutdown(id: Long) = chip.shutdownSubscriptions(chip.fabricIndex, device.binding.nodeIdHex.toULong(16).toLong(), id)
         try {
-            state = withTimeout(15_000) { decode(device, readPaths(pointer, paths(device)), ReportedState()) }
+            withTimeout(15_000) {
+                val readStartedAt = cache(device).currentSequence()
+                decode(device, readPaths(pointer, paths(device)), readStartedAt)
+            }
             chip.subscribeToPath(
                 { id ->
                     val dispose = synchronized(guard) { if (closed) true else { subscriptionId = id; false } }
@@ -126,7 +132,7 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
                     override fun onReport(nodeState: NodeState) {
                         synchronized(guard) {
                             if (!closed) try {
-                                state = decode(device, nodeState, state)
+                                val state = decode(device, nodeState)
                                 if (trySend(state).isFailure) close(IllegalStateException("Переполнен буфер изменений"))
                             } catch (e: Exception) { close(e) }
                         }
@@ -192,25 +198,23 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
         if (Capability.ColorControl in device.capabilities) { add(path(ep, 0x300, 0)); add(path(ep, 0x300, 1)) }
     }
 
-    private fun decode(device: Device, report: NodeState, previous: ReportedState): ReportedState {
-        val endpoint = device.binding.endpointId.toInt()
-        check(report.getEndpointState(endpoint)?.clusterStates?.values?.none { cluster -> cluster.attributeStatuses.values.any { it.status != Status.Code.Success } } != false) {
+    private fun decode(device: Device, report: NodeState, readStartedAt: Long? = null): MatterObservation {
+        val clusters = report.getEndpointState(device.binding.endpointId.toInt())?.clusterStates.orEmpty()
+        check(clusters.values.none { cluster -> cluster.attributeStatuses.values.any { it.status != Status.Code.Success } }) {
             "Устройство отклонило чтение атрибутов"
         }
-        fun attr(cluster: Long, id: Long) = report.getEndpointState(endpoint)?.getClusterState(cluster)?.attributeStates?.get(id)
-        fun int(cluster: Long, id: Long) = (attr(cluster, id)?.value as? Number)?.toInt()
-        val power = attr(6,0)
-        val level = attr(8,0)
-        val temperature = attr(0x300,7)
-        val previousHS = previous.color?.let(MatterColor::toHueSaturation)
-        val hue = int(0x300,0) ?: previousHS?.first
-        val saturation = int(0x300,1) ?: previousHS?.second
-        return previous.copy(
-            isOn = if (power != null) power.value as? Boolean else previous.isOn,
-            brightnessPercent = if (level != null) int(8,0)?.takeIf { it in 0..254 }?.let { (it * 100.0 / 254).roundToInt() } else previous.brightnessPercent,
-            colorTemperatureKelvin = if (temperature != null) int(0x300,7)?.takeIf { it > 0 }?.let { (1_000_000.0 / it).roundToInt() } else previous.colorTemperatureKelvin,
-            color = if (hue != null && saturation != null && hue in 0..254 && saturation in 0..254) MatterColor.fromHueSaturation(hue,saturation) else previous.color,
-        )
+        if (readStartedAt != null) {
+            fun present(cluster: Long, attribute: Long) = clusters[cluster]?.attributeStates?.containsKey(attribute) == true
+            check((Capability.OnOff !in device.capabilities || present(6, 0)) &&
+                (device.capabilities.none { it is Capability.LevelControl } || present(8, 0)) &&
+                (device.capabilities.none { it is Capability.ColorTemperature } || present(0x300, 7)) &&
+                (Capability.ColorControl !in device.capabilities || (present(0x300, 0) && present(0x300, 1)))) {
+                "Устройство вернуло неполный ответ на чтение"
+            }
+        }
+        return cache(device).update(clusters.map { (id, cluster) ->
+            ClusterUpdate(id, cluster.dataVersion.orElse(null), cluster.attributeStates.mapValues { it.value.value })
+        }, readStartedAt)
     }
     private fun path(ep: Int, cluster: Long, attr: Long) = ChipAttributePath.newInstance(ep, cluster, attr)
     private fun number(report: NodeState, ep: Int, cluster: Long, attr: Long) = (report.getEndpointState(ep)?.getClusterState(cluster)?.attributeStates?.get(attr)?.value as? Number)?.toInt()
@@ -220,6 +224,7 @@ internal class ChipMatterTransport(private val runtime: ChipRuntime) : MatterTra
             if (existing == null) into.endpointStates[ep] = state else state.clusterStates.forEach { (cluster, values) ->
                 val old = existing.clusterStates[cluster]
                 if (old == null) existing.clusterStates[cluster] = values else {
+                    values.dataVersion.ifPresent { old.setDataVersion(it) }
                     old.attributeStates.putAll(values.attributeStates)
                     old.attributeStatuses.putAll(values.attributeStatuses)
                 }

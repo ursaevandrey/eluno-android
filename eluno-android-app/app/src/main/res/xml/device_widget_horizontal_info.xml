@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="110dp" android:minHeight="48dp" android:targetCellWidth="2" android:targetCellHeight="1"
+    android:minWidth="110dp" android:minHeight="48dp"
     android:resizeMode="none" android:updatePeriodMillis="0" android:initialLayout="@layout/widget_loading"
     android:previewImage="@drawable/widget_preview_horizontal" android:configure="ru.eluno.app.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable" android:description="@string/widget_description" />

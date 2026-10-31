@@ -1,20 +1,21 @@
-package ru.eluno.app
+package ru.eluno.feature.widgets
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import ru.eluno.core.database.WidgetBindingEntity
+import ru.eluno.core.domain.WidgetBinding
+import kotlinx.coroutines.flow.distinctUntilChanged
 import ru.eluno.core.domain.Device
 import ru.eluno.core.domain.DeviceId
 import ru.eluno.core.domain.DeviceRepository
 import ru.eluno.core.domain.DeviceSnapshot
 
-internal data class WidgetPresentation(
+data class WidgetPresentation(
     val deviceId: DeviceId?,
     val device: Device?,
-    val snapshot: DeviceSnapshot?,
+    val pending: Boolean = false,
     val backgroundEnabled: Boolean = true,
     val backgroundOpacity: Int = 100,
     val colorMode: WidgetColorMode = WidgetColorMode.System,
@@ -22,13 +23,13 @@ internal data class WidgetPresentation(
 
 /** Do not emit an empty presentation while a stored binding is still being loaded. */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun observeWidgetPresentation(bindings: Flow<WidgetBindingEntity?>, repository: DeviceRepository): Flow<WidgetPresentation> =
+fun observeWidgetPresentation(bindings: Flow<WidgetBinding?>, repository: DeviceRepository): Flow<WidgetPresentation> =
     bindings.flatMapLatest { binding ->
-        if (binding == null) flowOf(WidgetPresentation(null, null, null))
+        if (binding == null) flowOf(WidgetPresentation(null, null))
         else {
-            val id = DeviceId(binding.deviceId)
+            val id = binding.deviceId
             combine(repository.observeDevice(id), repository.observeSnapshot(id)) { device, snapshot ->
-                WidgetPresentation(id, device, snapshot, binding.backgroundEnabled, binding.backgroundOpacity, WidgetColorMode.fromStorage(binding.colorMode))
+                WidgetPresentation(id, device, snapshot?.pendingCommand != null, binding.backgroundEnabled, binding.backgroundOpacity, WidgetColorMode.fromStorage(binding.colorMode))
             }
         }
-    }
+    }.distinctUntilChanged()

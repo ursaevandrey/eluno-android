@@ -1,8 +1,31 @@
 diff --git a/src/controller/java/AndroidOperationalCredentialsIssuer.cpp b/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
-index cd7c78ee..5128981b 100644
+index cd7c78ee..4773ac6b 100644
 --- a/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
 +++ b/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
-@@ -372,7 +372,7 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
+@@ -65,7 +65,9 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::Initialize(PersistentStorageDele
+     Crypto::P256SerializedKeypair serializedKey;
+     uint16_t keySize = static_cast<uint16_t>(sizeof(serializedKey));
+ 
+-    if (storage.SyncGetKeyValue(kOperationalCredentialsIssuerKeypairStorage, &serializedKey, keySize) != CHIP_NO_ERROR)
++    CHIP_ERROR readError = storage.SyncGetKeyValue(kOperationalCredentialsIssuerKeypairStorage, &serializedKey, keySize);
++    VerifyOrReturnError(readError == CHIP_NO_ERROR || readError == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND, readError);
++    if (readError == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND)
+     {
+         // Storage doesn't have an existing keypair. Let's create one and add it to the storage.
+         ReturnErrorOnFailure(mIssuer.Initialize(Crypto::ECPKeyTarget::ECDSA));
+@@ -108,9 +110,10 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::GenerateNOCChainAfterValidation(
+         ReturnErrorOnFailure(rcac_dn.GetCertChipId(rcacId));
+         VerifyOrReturnError(rcacId == mIssuerId, CHIP_ERROR_INTERNAL);
+     }
+-    // If root certificate not found in the storage, generate new root certificate.
++    // Only absence permits creation; storage/integrity failures must not replace credentials.
+     else
+     {
++        VerifyOrReturnError(err == CHIP_ERROR_PERSISTED_STORAGE_VALUE_NOT_FOUND, err);
+         ReturnErrorOnFailure(GenerateRootCertificate(mIssuer, mIssuerId, Optional<FabricId>(), mNow, mNow + mValidity, rcac));
+         PERSISTENT_KEY_OP(fabricId, kOperationalCredentialsRootCertificateStorage, key,
+                           ReturnErrorOnFailure(mStorage->SyncSetKeyValue(key, rcac.data(), static_cast<uint16_t>(rcac.size()))));
+@@ -372,7 +375,7 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
          GenerateNOCChainAfterValidation(assignedId, mNextFabricId, chip::kUndefinedCATs, pubkey, rcacSpan, icacSpan, nocSpan));
  
      // TODO: Force callers to set IPK if used before GenerateNOCChain will succeed.
@@ -11,7 +34,7 @@ index cd7c78ee..5128981b 100644
  
      // The below static assert validates a key assumption in types used (needed for public API conformance)
      static_assert(CHIP_CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES == kAES_CCM128_Key_Length, "IPK span sizing must match");
-@@ -382,9 +382,9 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
+@@ -382,9 +385,9 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
      uint8_t ipkValue[CHIP_CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES];
      Crypto::IdentityProtectionKeySpan ipkSpan(ipkValue);
  
@@ -113,3 +136,59 @@ index d8e08f91..cc0db53a 100644
    public DiscoveredDevice getDiscoveredDevice(int idx) {
      return getDiscoveredDevice(deviceControllerPtr, idx);
    }
+diff --git a/src/platform/android/java/chip/platform/NsdManagerServiceResolver.java b/src/platform/android/java/chip/platform/NsdManagerServiceResolver.java
+index 33d5f44d..8c02ae18 100644
+--- a/src/platform/android/java/chip/platform/NsdManagerServiceResolver.java
++++ b/src/platform/android/java/chip/platform/NsdManagerServiceResolver.java
+@@ -128,7 +128,7 @@ public class NsdManagerServiceResolver implements ServiceResolver {
+           }
+ 
+           ScheduledFuture<?> resolveTimeoutExecutor =
+-              Executors.newSingleThreadScheduledExecutor()
++              NsdTimeouts.executor()
+                   .schedule(timeoutRunnable, timeout, TimeUnit.MILLISECONDS);
+ 
+           NsdServiceFinderAndResolver serviceFinderResolver =
+diff --git a/src/platform/android/java/chip/platform/NsdServiceFinderAndResolver.java b/src/platform/android/java/chip/platform/NsdServiceFinderAndResolver.java
+index eea97c79..989fa457 100644
+--- a/src/platform/android/java/chip/platform/NsdServiceFinderAndResolver.java
++++ b/src/platform/android/java/chip/platform/NsdServiceFinderAndResolver.java
+@@ -72,7 +72,7 @@ class NsdServiceFinderAndResolver implements NsdManager.DiscoveryListener {
+ 
+     NsdServiceFinderAndResolver serviceFinderResolver = this;
+     this.stopDiscoveryRunnable =
+-        Executors.newSingleThreadScheduledExecutor()
++        NsdTimeouts.executor()
+             .schedule(
+                 new Runnable() {
+                   @Override
+diff --git a/src/platform/android/java/chip/platform/NsdTimeouts.java b/src/platform/android/java/chip/platform/NsdTimeouts.java
+new file mode 100644
+index 00000000..c03474f6
+--- /dev/null
++++ b/src/platform/android/java/chip/platform/NsdTimeouts.java
+@@ -0,0 +1,24 @@
++package chip.platform;
++
++import java.util.concurrent.ScheduledThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
++
++/** Shared process scheduler: cancelled tasks release captures, idle threads expire. */
++final class NsdTimeouts {
++  private static final ScheduledThreadPoolExecutor EXECUTOR = create();
++
++  private static ScheduledThreadPoolExecutor create() {
++    ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, runnable -> {
++      Thread thread = new Thread(runnable, "ElunoNsdTimeout");
++      thread.setDaemon(true);
++      return thread;
++    });
++    executor.setRemoveOnCancelPolicy(true);
++    executor.setKeepAliveTime(1, TimeUnit.SECONDS);
++    executor.allowCoreThreadTimeOut(true);
++    return executor;
++  }
++
++  static ScheduledThreadPoolExecutor executor() { return EXECUTOR; }
++  private NsdTimeouts() {}
++}

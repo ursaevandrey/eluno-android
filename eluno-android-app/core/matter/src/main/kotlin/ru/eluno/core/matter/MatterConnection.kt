@@ -13,9 +13,9 @@ import kotlin.random.Random
 /** Transport owns native handles; a returned invoke only acknowledges delivery, never state. */
 interface MatterTransport {
     suspend fun reconnect(device: Device) = Unit
-    suspend fun read(device: Device): ReportedState
+    suspend fun read(device: Device): MatterObservation
     suspend fun invoke(device: Device, command: DeviceCommand)
-    fun subscribe(device: Device): Flow<ReportedState>
+    fun subscribe(device: Device): Flow<MatterObservation>
 }
 
 data class LocalNetwork(val available: Boolean, val generation: Long = 0)
@@ -31,8 +31,8 @@ class ConnectedMatterPort(
     private val nodeLocks = ConcurrentHashMap<String, Mutex>()
     private fun lock(device: Device) = nodeLocks.getOrPut(device.binding.nodeIdHex) { Mutex() }
 
-    private fun snapshot(device: Device, state: ReportedState) = DeviceSnapshot(
-        device.id, state, Freshness.Fresh, Availability.Reachable, now(),
+    private fun snapshot(device: Device, state: MatterObservation) = DeviceSnapshot(
+        device.id, state.reported, Freshness.Fresh, Availability.Reachable, state.observedAt ?: now(), sourceSequence = state.sequence,
     )
 
     override suspend fun read(device: Device): CommandResult = operation {
@@ -47,7 +47,7 @@ class ConnectedMatterPort(
                 // Never replay an invoke after timeout: its effect may already have happened.
                 withTimeout(10_000) {
                     var state = transport.read(device)
-                    while (!command.matches(state)) {
+                    while (!command.matches(state.reported)) {
                         delay(300)
                         state = transport.read(device)
                     }
@@ -93,7 +93,7 @@ class ConnectedMatterPort(
                             while (currentCoroutineContext().isActive) {
                                 delay(15_000)
                                 when (val result = read(device)) {
-                                    is CommandResult.Success -> emit(result.snapshot.reported)
+                                    is CommandResult.Success -> emit(MatterObservation(result.snapshot.reported, result.snapshot.sourceSequence, result.snapshot.lastConfirmedAt))
                                     // A timeout must fail the merged flow, not merely cancel its
                                     // polling child and leave a silent subscription running.
                                     is CommandResult.Failure -> error("Periodic read failed")

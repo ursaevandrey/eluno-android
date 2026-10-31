@@ -88,6 +88,13 @@ interface ElunoDao {
     @Query("SELECT * FROM devices WHERE id = :id") suspend fun getDevice(id: String): DeviceEntity?
     @Query("SELECT * FROM snapshots WHERE deviceId = :id") fun observeSnapshot(id: String): Flow<SnapshotEntity?>
     @Query("SELECT * FROM snapshots WHERE deviceId = :id") suspend fun getSnapshot(id: String): SnapshotEntity?
+    @Transaction suspend fun restoreWidgetBindings(oldIds: List<Int>, newIds: List<Int>) {
+        require(oldIds.size == newIds.size)
+        val restored = oldIds.zip(newIds).mapNotNull { (old, new) -> getWidgetBinding(old)?.copy(appWidgetId = new) }
+        oldIds.forEach { deleteWidgetBinding(it) }
+        restored.forEach { upsertWidgetBinding(it) }
+    }
+    @Query("SELECT * FROM widget_bindings ORDER BY appWidgetId") fun observeWidgetBindings(): Flow<List<WidgetBindingEntity>>
     @Query("SELECT * FROM widget_bindings WHERE appWidgetId = :id") fun observeWidgetBinding(id: Int): Flow<WidgetBindingEntity?>
     @Query("SELECT * FROM widget_bindings WHERE appWidgetId = :id") suspend fun getWidgetBinding(id: Int): WidgetBindingEntity?
     @Upsert suspend fun upsertWidgetBinding(binding: WidgetBindingEntity)
@@ -95,6 +102,8 @@ interface ElunoDao {
     @Upsert suspend fun upsertDevice(entity: DeviceEntity)
     @Upsert suspend fun upsertSnapshot(entity: SnapshotEntity)
     @Upsert suspend fun upsertCommand(entity: CommandEntity)
+    @Query("DELETE FROM command_records WHERE id IN (SELECT id FROM command_records WHERE status IN ('Confirmed','Failed','Interrupted','Expired','Superseded') AND id NOT IN (SELECT pendingId FROM snapshots WHERE pendingId IS NOT NULL) AND (createdAtEpochMs < :before OR id NOT IN (SELECT id FROM command_records WHERE status IN ('Confirmed','Failed','Interrupted','Expired','Superseded') ORDER BY createdAtEpochMs DESC, id DESC LIMIT :keep)) LIMIT 200)")
+    suspend fun pruneCommands(before: Long, keep: Int): Int
     @Query("UPDATE devices SET name = :name WHERE id = :id") suspend fun rename(id: String, name: String): Int
     @Query("UPDATE devices SET icon = :icon WHERE id = :id") suspend fun setIcon(id: String, icon: String): Int
 }

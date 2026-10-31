@@ -1,13 +1,21 @@
 package ru.eluno.feature.widgets
 
-import kotlinx.coroutines.flow.Flow
-import ru.eluno.core.domain.DeviceId
-import ru.eluno.core.domain.DeviceSnapshot
-import ru.eluno.core.domain.WidgetBinding
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.*
+import ru.eluno.core.domain.*
 
-interface WidgetBindingRepository {
-    fun observeBinding(appWidgetId: Int): Flow<WidgetBinding?>
-    fun observeDeviceState(deviceId: DeviceId): Flow<DeviceSnapshot?>
-    suspend fun bind(binding: WidgetBinding)
-    suspend fun unbind(appWidgetId: Int)
+/** No device observers without bindings; timestamps never invalidate widget content. */
+@OptIn(ExperimentalCoroutinesApi::class)
+fun observeWidgetUpdates(bindings: Flow<List<WidgetBinding>>, devices: DeviceRepository): Flow<Set<Int>> = flow {
+    var previous = emptyMap<Int, WidgetPresentation>()
+    bindings.distinctUntilChanged().flatMapLatest { entries ->
+        if (entries.isEmpty()) flowOf(emptyMap())
+        else combine(entries.map { binding ->
+            observeWidgetPresentation(flowOf(binding), devices).map { binding.appWidgetId to it }
+        }) { it.toMap() }
+    }.collect { next ->
+        val changed = (previous.keys + next.keys).filter { previous[it] != next[it] }.toSet()
+        previous = next
+        if (changed.isNotEmpty()) emit(changed)
+    }
 }

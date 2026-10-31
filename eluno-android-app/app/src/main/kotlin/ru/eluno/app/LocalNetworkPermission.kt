@@ -3,7 +3,7 @@ package ru.eluno.app
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import androidx.core.net.toUri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -40,6 +40,6 @@ internal fun localNetworkAllowed(context: Context) = Build.VERSION.SDK_INT < 37 
         Text("Доступ к локальной сети", style = MaterialTheme.typography.headlineMedium)
         Text("Eluno использует домашнюю сеть для поиска устройств Matter и управления ими.", Modifier.padding(vertical = 16.dp))
         Button(onClick = { launcher.launch("android.permission.ACCESS_LOCAL_NETWORK") }) { Text("Разрешить доступ") }
-        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }) { Text("Открыть настройки приложения") }
+        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())) }) { Text("Открыть настройки приложения") }
     }
 }

@@ -384,5 +384,5 @@ private val deviceIconChoices = listOf(
 )
 @Composable private fun DeviceError.label() = when (this) { DeviceError.DeviceNotFound -> stringResource(R.string.device_not_found); DeviceError.Unavailable -> stringResource(R.string.unavailable_detail); is DeviceError.InvalidValue -> message; is DeviceError.Transport -> message; is DeviceError.UnsupportedCapability -> stringResource(R.string.unsupported_capability, capability) }
 private fun RgbColor.color() = Color(red, green, blue)
-private fun formatNumber(value: Int) = String.format("%,d", value).replace(',', ' ')
+private fun formatNumber(value: Int) = String.format(java.util.Locale.ROOT, "%,d", value).replace(',', ' ')
 @Composable private fun ColorDot(rgb: RgbColor) { Box(Modifier.size(28.dp).clip(CircleShape).background(rgb.color())) }

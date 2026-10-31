@@ -42,8 +42,8 @@ dependencies {
     implementation(project(":feature:commissioning"))
     implementation(project(":feature:settings"))
     implementation(project(":feature:widgets"))
-    implementation("androidx.glance:glance-appwidget:1.2.0")
-    implementation("androidx.work:work-runtime-ktx:2.10.5")
+    implementation(libs.glance.appwidget)
+    implementation(libs.work.runtime)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
@@ -59,6 +59,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    testImplementation(libs.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
