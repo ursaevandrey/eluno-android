@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">Eluno</string>
+    <string name="select_device">Выберите устройство слева, чтобы открыть управление</string>
+    <string name="widget_description">Управление устройством Eluno</string>
+    <string name="widget_loading">Загрузка устройства…</string>
+    <string name="widget_label">Eluno · Устройство</string>
+    <string name="widget_horizontal_label">Eluno · 1 × 2</string>
+    <string name="widget_square_label">Eluno · 2 × 2</string>
+    <string name="widget_missing">Устройство не выбрано</string>
+    <string name="widget_configure">Настроить</string>
+    <string name="widget_pending">Выполняется…</string>
+    <string name="widget_turn_on">Включить: %1$s</string>
+    <string name="widget_turn_off">Выключить: %1$s</string>
+    <string name="widget_toggle">Переключить: %1$s</string>
+    <string name="widget_notification_channel">Управление устройствами</string>
+    <string name="widget_notification_title">Управление устройством</string>
+    <string name="widget_settings_title">Настройки виджета</string>
+    <string name="widget_choose_device">Устройство</string>
+    <string name="widget_select_device">Выберите устройство</string>
+    <string name="widget_no_devices">Нет устройств с управлением питанием.</string>
+    <string name="widget_open_app">Открыть приложение</string>
+    <string name="widget_background">Фон</string>
+    <string name="widget_opacity">Непрозрачность</string>
+    <string name="widget_opacity_percent">%1$d%%</string>
+    <string name="widget_preview">Предпросмотр</string>
+    <string name="widget_preview_device">Название устройства</string>
+    <string name="widget_save">Сохранить</string>
+    <string name="widget_cancel">Отмена</string>
+    <string name="widget_save_error">Не удалось сохранить настройки. Попробуйте ещё раз.</string>
+    <string name="widget_colors">Цвета</string>
+    <string name="widget_colors_system">В соответствии с настройками телефона</string>
+    <string name="widget_colors_light">Светлая</string>
+    <string name="widget_colors_dark">Тёмная</string>
+</resources>

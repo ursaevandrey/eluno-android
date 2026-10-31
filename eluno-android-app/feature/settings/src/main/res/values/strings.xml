@@ -1,0 +1,15 @@
+<resources>
+    <string name="settings_title">Настройки</string>
+    <string name="toolbar_label">Оформление и приложение</string>
+    <string name="appearance">Оформление</string>
+    <string name="theme_system">Системная</string>
+    <string name="theme_light">Светлая</string>
+    <string name="theme_dark">Тёмная</string>
+    <string name="selected">Выбрано</string>
+    <string name="dynamic_colors">Динамические цвета</string>
+    <string name="dynamic_hint">Цвета обоев на Android 12 и новее</string>
+    <string name="about">О приложении</string>
+    <string name="version">Версия %1$s</string>
+    <string name="local_title">Управление рядом с вами</string>
+    <string name="local_text">Без аккаунта и облака. Данные хранятся на устройстве.</string>
+</resources>

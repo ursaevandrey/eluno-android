@@ -1,0 +1,6 @@
+<resources>
+    <color name="widget_background_on">#443260</color><color name="widget_background_off">#302D36</color><color name="widget_ink">#F1ECF4</color><color name="widget_secondary">#CAC4D0</color><color name="widget_button_on">#D0BCFF</color><color name="widget_button_off">#423E49</color><color name="widget_icon_on">#381E72</color><color name="widget_icon_off">#CAC4D0</color>
+    <color name="widget_power_ripple">#66381E72</color>
+    <color name="widget_background_20">#33443260</color>
+    <color name="widget_background_60">#99443260</color>
+</resources>

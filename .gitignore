@@ -1,0 +1,19 @@
+# Local OS files and build caches
+.DS_Store
+._*
+.kotlin/
+__pycache__/
+*.pyc
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+*.jks
+*.keystore
+key.properties
+
+# Android build artifacts
+*.apk
+*.aab

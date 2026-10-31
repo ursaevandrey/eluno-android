@@ -1,0 +1,115 @@
+diff --git a/src/controller/java/AndroidOperationalCredentialsIssuer.cpp b/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
+index cd7c78ee..5128981b 100644
+--- a/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
++++ b/src/controller/java/AndroidOperationalCredentialsIssuer.cpp
+@@ -372,7 +372,7 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
+         GenerateNOCChainAfterValidation(assignedId, mNextFabricId, chip::kUndefinedCATs, pubkey, rcacSpan, icacSpan, nocSpan));
+ 
+     // TODO: Force callers to set IPK if used before GenerateNOCChain will succeed.
+-    ByteSpan defaultIpkSpan = chip::GroupTesting::DefaultIpkValue::GetDefaultIpk();
++    // Eluno: use the same persistent per-fabric IPK as the local commissioner.
+ 
+     // The below static assert validates a key assumption in types used (needed for public API conformance)
+     static_assert(CHIP_CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES == kAES_CCM128_Key_Length, "IPK span sizing must match");
+@@ -382,9 +382,9 @@ CHIP_ERROR AndroidOperationalCredentialsIssuer::LocalGenerateNOCChain(const Byte
+     uint8_t ipkValue[CHIP_CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES];
+     Crypto::IdentityProtectionKeySpan ipkSpan(ipkValue);
+ 
+-    VerifyOrReturnError(defaultIpkSpan.size() == sizeof(ipkValue), CHIP_ERROR_INTERNAL);
+-
+-    memcpy(&ipkValue[0], defaultIpkSpan.data(), defaultIpkSpan.size());
++    uint16_t ipkSize = sizeof(ipkValue);
++    ReturnErrorOnFailure(mStorage->SyncGetKeyValue("ElunoIPK", ipkValue, ipkSize));
++    VerifyOrReturnError(ipkSize == sizeof(ipkValue), CHIP_ERROR_INTERNAL);
+ 
+     // Call-back into commissioner with the generated data.
+     onCompletion->mCall(onCompletion->mContext, CHIP_NO_ERROR, nocSpan, ByteSpan(), rcacSpan, MakeOptional(ipkSpan),
+diff --git a/src/controller/java/CHIPDeviceController-JNI.cpp b/src/controller/java/CHIPDeviceController-JNI.cpp
+index 7bd31e8a..e8d4e6df 100644
+--- a/src/controller/java/CHIPDeviceController-JNI.cpp
++++ b/src/controller/java/CHIPDeviceController-JNI.cpp
+@@ -830,6 +830,8 @@ JNI_METHOD(void, pairDeviceWithCode)
+     JniUtfString setUpCodeJniString(env, setUpCode);
+ 
+     CommissioningParameters commissioningParams = wrapper->GetCommissioningParameters();
++    // Match both fabric ID and root public key before accepting an existing operational node.
++    commissioningParams.SetCheckForMatchingFabric(true);
+ 
+     auto discoveryType = DiscoveryType::kAll;
+     if (useOnlyOnNetworkDiscovery)
+@@ -883,6 +885,13 @@ JNI_METHOD(void, pairDeviceWithCode)
+     }
+ }
+ 
++JNI_METHOD(jlong, getMatchingFabricNodeId)(JNIEnv * env, jobject self, jlong handle)
++{
++    chip::DeviceLayer::StackLock lock;
++    auto * controller = AndroidDeviceControllerWrapper::FromJNIHandle(handle)->Controller();
++    return static_cast<jlong>(controller->GetCommissioningParameters().GetRemoteNodeId().ValueOr(chip::kUndefinedNodeId));
++}
++
+ JNI_METHOD(void, establishPaseConnection)(JNIEnv * env, jobject self, jlong handle, jlong deviceId, jint connObj, jlong pinCode)
+ {
+     chip::DeviceLayer::StackLock lock;
+@@ -1980,6 +1989,25 @@ JNI_METHOD(void, discoverCommissionableNodes)(JNIEnv * env, jobject self, jlong
+     }
+ }
+ 
++JNI_METHOD(void, markNodeSessionsDefunct)(JNIEnv * env, jobject self, jlong handle, jlong nodeId)
++{
++    chip::DeviceLayer::StackLock lock;
++    auto * controller = AndroidDeviceControllerWrapper::FromJNIHandle(handle)->Controller();
++    controller->SessionMgr()->MarkSessionsAsDefunct(chip::ScopedNodeId(static_cast<chip::NodeId>(nodeId), controller->GetFabricIndex()),
++                                                  chip::MakeOptional(chip::Transport::SecureSession::Type::kCASE));
++}
++
++JNI_METHOD(void, stopCommissionableDiscovery)(JNIEnv * env, jobject self, jlong handle)
++{
++    chip::DeviceLayer::StackLock lock;
++    auto * wrapper = AndroidDeviceControllerWrapper::FromJNIHandle(handle);
++    CHIP_ERROR err = wrapper->Controller()->StopCommissionableDiscovery();
++    if (err != CHIP_NO_ERROR)
++    {
++        JniReferences::GetInstance().ThrowError(env, sChipDeviceControllerExceptionCls, err);
++    }
++}
++
+ JNI_METHOD(jobject, getDiscoveredDevice)(JNIEnv * env, jobject self, jlong handle, jint idx)
+ {
+     chip::DeviceLayer::StackLock lock;
+diff --git a/src/controller/java/src/chip/devicecontroller/ChipDeviceController.java b/src/controller/java/src/chip/devicecontroller/ChipDeviceController.java
+index d8e08f91..cc0db53a 100644
+--- a/src/controller/java/src/chip/devicecontroller/ChipDeviceController.java
++++ b/src/controller/java/src/chip/devicecontroller/ChipDeviceController.java
+@@ -650,6 +650,12 @@ public class ChipDeviceController {
+     stopDevicePairing(deviceControllerPtr, deviceId);
+   }
+ 
++  public long getMatchingFabricNodeId() {
++    return getMatchingFabricNodeId(deviceControllerPtr);
++  }
++
++  private native long getMatchingFabricNodeId(long deviceControllerPtr);
++
+   /**
+    * Returns a pointer to a device currently being commissioned. This should be used before the
+    * device is operationally available.
+@@ -893,6 +899,18 @@ public class ChipDeviceController {
+     discoverCommissionableNodes(deviceControllerPtr);
+   }
+ 
++  public void markNodeSessionsDefunct(long nodeId) {
++    markNodeSessionsDefunct(deviceControllerPtr, nodeId);
++  }
++
++  private native void markNodeSessionsDefunct(long deviceControllerPtr, long nodeId);
++
++  public void stopCommissionableDiscovery() {
++    stopCommissionableDiscovery(deviceControllerPtr);
++  }
++
++  private native void stopCommissionableDiscovery(long deviceControllerPtr);
++
+   public DiscoveredDevice getDiscoveredDevice(int idx) {
+     return getDiscoveredDevice(deviceControllerPtr, idx);
+   }
