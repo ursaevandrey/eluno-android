@@ -2,10 +2,14 @@
 
 package ru.eluno.feature.devices
 
+import android.graphics.Color as AndroidColor
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -14,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -22,7 +27,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -33,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -321,7 +332,129 @@ fun DeviceDetailScreen(viewModel: DeviceDetailViewModel, onBack: (() -> Unit)?, 
 
 @Composable private fun ColorControl(selected: RgbColor?, disabled: Boolean, onColor: (RgbColor) -> Unit) {
     val colors = listOf(RgbColor(255,181,64), RgbColor(238,111,111), RgbColor(213,87,164), RgbColor(157,112,224), RgbColor(87,88,225), RgbColor(111,198,195), RgbColor(113,184,117), RgbColor(240,237,255))
-    Column { Text(stringResource(R.string.glow_color), style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(12.dp)); colors.chunked(4).forEach { row -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) { row.forEach { rgb -> val chosen = rgb == selected; Box(Modifier.size(54.dp).clip(CircleShape).background(rgb.color()).clickable(enabled = !disabled) { onColor(rgb) }, contentAlignment = Alignment.Center) { if (chosen) Icon(Icons.Outlined.Check, stringResource(R.string.selected_color), tint = if (rgb.red + rgb.green + rgb.blue > 550) Color(0xFF382653) else Color.White) } } }; Spacer(Modifier.height(12.dp)) } }
+    var customColor by remember { mutableStateOf(false) }
+    Column {
+        Text(stringResource(R.string.glow_color), style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(12.dp))
+        colors.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                row.forEach { rgb ->
+                    val chosen = rgb == selected
+                    Box(
+                        Modifier.size(54.dp).clip(CircleShape).background(rgb.color()).clickable(enabled = !disabled) { onColor(rgb) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (chosen) Icon(Icons.Outlined.Check, stringResource(R.string.selected_color), tint = if (rgb.red + rgb.green + rgb.blue > 550) Color(0xFF382653) else Color.White)
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+        OutlinedButton(onClick = { customColor = true }, enabled = !disabled, modifier = Modifier.fillMaxWidth()) {
+            selected?.let { ColorDot(it); Spacer(Modifier.width(8.dp)) }
+            Icon(Icons.Outlined.Colorize, null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.custom_color))
+        }
+    }
+    if (customColor) {
+        CustomColorDialog(
+            initial = selected ?: colors.first(),
+            onDismiss = { customColor = false },
+            onApply = { onColor(it); customColor = false },
+        )
+    }
+}
+
+@Composable private fun CustomColorDialog(initial: RgbColor, onDismiss: () -> Unit, onApply: (RgbColor) -> Unit) {
+    val initialHsv = remember(initial) { initial.toHsv() }
+    var hue by remember(initial) { mutableFloatStateOf(initialHsv[0]) }
+    var saturation by remember(initial) { mutableFloatStateOf(initialHsv[1]) }
+    var value by remember(initial) { mutableFloatStateOf(initialHsv[2]) }
+    val preview = hsvColor(hue, saturation, value)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.custom_color)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Box(Modifier.size(52.dp).clip(CircleShape).background(preview.color()).border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+                    Text(stringResource(R.string.selected_color), style = MaterialTheme.typography.titleSmall)
+                }
+                ColorPlane(hue, saturation, value) { newSaturation, newValue ->
+                    saturation = newSaturation
+                    value = newValue
+                }
+                HueStrip(hue) { hue = it }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        confirmButton = { Button(onClick = { onApply(preview) }) { Text(stringResource(R.string.apply)) } },
+    )
+}
+
+@Composable
+private fun ColorPlane(hue: Float, saturation: Float, value: Float, onChange: (Float, Float) -> Unit) {
+    var fieldSize by remember { mutableStateOf(IntSize.Zero) }
+    fun select(position: Offset) {
+        if (fieldSize.width == 0 || fieldSize.height == 0) return
+        onChange(
+            (position.x / fieldSize.width).coerceIn(0f, 1f),
+            (1f - position.y / fieldSize.height).coerceIn(0f, 1f),
+        )
+    }
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(220.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .onSizeChanged { fieldSize = it }
+            .pointerInput(fieldSize) { detectTapGestures { select(it) } }
+            .pointerInput(fieldSize) {
+                detectDragGestures(
+                    onDragStart = { select(it) },
+                    onDrag = { change, _ -> select(change.position) },
+                )
+            },
+    ) {
+        drawRect(Brush.horizontalGradient(listOf(Color.White, hsvColor(hue, 1f, 1f).color())))
+        drawRect(Brush.verticalGradient(listOf(Color.Transparent, Color.Black)))
+        val marker = Offset(saturation * size.width, (1f - value) * size.height)
+        drawCircle(Color.Black.copy(alpha = 0.65f), 12.dp.toPx(), marker, style = Stroke(4.dp.toPx()))
+        drawCircle(Color.White, 10.dp.toPx(), marker, style = Stroke(3.dp.toPx()))
+    }
+}
+
+@Composable
+private fun HueStrip(hue: Float, onChange: (Float) -> Unit) {
+    var stripSize by remember { mutableStateOf(IntSize.Zero) }
+    fun select(position: Offset) {
+        if (stripSize.width == 0) return
+        onChange((position.x / stripSize.width * 360f).coerceIn(0f, 360f))
+    }
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(21.dp))
+            .onSizeChanged { stripSize = it }
+            .pointerInput(stripSize) { detectTapGestures { select(it) } }
+            .pointerInput(stripSize) {
+                detectDragGestures(
+                    onDragStart = { select(it) },
+                    onDrag = { change, _ -> select(change.position) },
+                )
+            },
+    ) {
+        drawRect(
+            Brush.horizontalGradient(
+                listOf(Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red),
+            ),
+        )
+        val markerX = hue / 360f * size.width
+        drawCircle(Color.Black.copy(alpha = 0.65f), 12.dp.toPx(), Offset(markerX, size.height / 2), style = Stroke(4.dp.toPx()))
+        drawCircle(Color.White, 10.dp.toPx(), Offset(markerX, size.height / 2), style = Stroke(3.dp.toPx()))
+    }
 }
 
 @Composable private fun ErrorPanel(message: String) { Surface(color = LocalElunoColors.current.warningContainer, shape = MaterialTheme.shapes.medium) { Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) { Icon(Icons.Outlined.WarningAmber, null, tint = LocalElunoColors.current.warning); Column { Text(stringResource(R.string.unavailable_title), style = MaterialTheme.typography.titleMedium); Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant) } } } }
@@ -384,5 +517,10 @@ private val deviceIconChoices = listOf(
 )
 @Composable private fun DeviceError.label() = when (this) { DeviceError.DeviceNotFound -> stringResource(R.string.device_not_found); DeviceError.Unavailable -> stringResource(R.string.unavailable_detail); is DeviceError.InvalidValue -> message; is DeviceError.Transport -> message; is DeviceError.UnsupportedCapability -> stringResource(R.string.unsupported_capability, capability) }
 private fun RgbColor.color() = Color(red, green, blue)
+private fun RgbColor.toHsv() = FloatArray(3).also { AndroidColor.RGBToHSV(red, green, blue, it) }
+private fun hsvColor(hue: Float, saturation: Float, value: Float): RgbColor {
+    val packed = AndroidColor.HSVToColor(floatArrayOf(hue, saturation, value))
+    return RgbColor(AndroidColor.red(packed), AndroidColor.green(packed), AndroidColor.blue(packed))
+}
 private fun formatNumber(value: Int) = String.format(java.util.Locale.ROOT, "%,d", value).replace(',', ' ')
 @Composable private fun ColorDot(rgb: RgbColor) { Box(Modifier.size(28.dp).clip(CircleShape).background(rgb.color())) }

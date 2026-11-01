@@ -41,6 +41,8 @@
     <string name="color">Цвет</string>
     <string name="glow_color">Цвет свечения</string>
     <string name="selected_color">Выбранный цвет</string>
+    <string name="custom_color">Свой цвет</string>
+    <string name="apply">Применить</string>
     <string name="pending">Ожидаем подтверждения устройства</string>
     <string name="last_update">Подтверждено: %1$s</string>
     <string name="last_confirmed">Последнее подтверждённое состояние</string>
